@@ -88,3 +88,4 @@ describe('pushToGithub', () => {
     expect(mockGithubImplementation.pushFiles).toHaveBeenCalledWith(mockCommitMsg, mockDataToPush);
   });
 });
+
