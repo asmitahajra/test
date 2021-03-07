@@ -1,108 +1,234 @@
-const fs = require('fs');
+// const authToken = 'abcdef';
+// const repositoryName = 'abc4321';
+// const username = 'asmitahajra';
+// const branchName = 'main';
+// const commitMessage = 'Making a commit with my adorable files';
+// const folders = ['handlers'];
+
 const GitHub = require('github-api');
-jest.mock('./pushToGithub');
-const { GithubAPI } = require('./pushToGithub');
+const fs = require('fs');
+const path = require('path');
 
-// jest.mock('./pushToGithub', () => ({
-//   ...require.requireActual('./pushToGithub'),
-//   getAllFilesFunction: jest.fn(),
-//   getAllFileData: jest.fn(),
-// }));
-const pushFunctions = require('./pushToGithub');
-// const GitHubAPI= require('./')
+function GithubAPI(auth) {
+  let repo;
+  const filesToCommit = [];
+  const currentBranch = {};
+  const newCommit = {};
 
-describe('getFiles', () => {
-  const mockDir = 'handlers';
-  const mockFiles = ['health.handler.js'];
-  const arratOfFiles = [];
-  const expectedValue = ['handlers/health.handler.js'];
-  //   const failedMockStatSyncValue = {
-  //     isDirectory() { return false; },
-  //   };
-  const mockStatSyncValue = {
-    isDirectory() { return false; },
-  };
-  it('should return ', () => {
-    const spyOnReaddirSync = jest.spyOn(fs, 'readdirSync');
-    spyOnReaddirSync.mockReturnValueOnce(mockFiles);
-    const spyOnStatSync = jest.spyOn(fs, 'statSync');
-    spyOnStatSync.mockReturnValueOnce(mockStatSyncValue);
-    const result = pushFunctions.getFiles(mockDir, arratOfFiles);
-    expect(result).toEqual(expectedValue);
-  });
-});
+  // the underlying library for making requests
+  const gh = new GitHub(auth);
 
-describe('getAllFilesFunction', () => {
-  const mockFolders = ['abc.js'];
-  const expectedValue = ['abc.js'];
-  const mockstatSyncValue = {
-    isFile() { return true; },
+  /**
+     * Sets the current repository to make push to
+     * @public
+     * @param {string} userName Name of the user who owns the repository
+     * @param {string} repoName Name of the repository
+     * @return void
+     */
+  this.setRepo = (userName, repoName) => {
+    repo = gh.getRepo(userName, repoName);
   };
 
-  it('should return final array of all files in various directories', () => {
-    const spyOnStatSync = jest.spyOn(fs, 'statSync');
-    spyOnStatSync.mockReturnValueOnce(mockstatSyncValue);
-    const spyOnGetAllFiles = jest.spyOn(pushFunctions, 'getFiles');
-    spyOnGetAllFiles.mockReturnValueOnce('handlers/health.handler.js');
-    const result = pushFunctions.getAllFilesFunction(mockFolders);
-    expect(result).toEqual(expectedValue);
+  /**
+     * Sets the current branch to make push to. If the branch doesn't exist yet,
+     * it will be created first
+     * @public
+     * @param {string} branchName The name of the branch
+     * @return {Promise}
+     */
+  this.setBranch = (branchName) => {
+    if (!repo) {
+      throw Object.assign(
+        new Error('Repository is not initialized'),
+      );
+    }
+
+    return repo.listBranches().then((branches) => {
+      const branchExists = branches.data.find((branch) => branch.name === branchName);
+
+      if (!branchExists) {
+        return repo.createBranch('master', branchName)
+          .then(() => {
+            currentBranch.name = branchName;
+          });
+      }
+      currentBranch.name = branchName;
+      return null;
+    });
+  };
+
+  /**
+     * Sets the current commit's SHA
+     * @private
+     * @return {Promise}
+     */
+
+  const getCurrentCommitSHA = () => repo.getRef(`heads/${currentBranch.name}`)
+    .then((ref) => {
+      currentBranch.commitSHA = ref.data.object.sha;
+    });
+
+  /**
+     * Sets the current commit tree's SHA
+     * @private
+     * @return {Promise}
+     */
+  const getCurrentTreeSHA = () => repo.getCommit(currentBranch.commitSHA)
+    .then((commit) => {
+      currentBranch.treeSHA = commit.data.tree.sha;
+    });
+
+  /**
+     * Creates a blob for a single file
+     * @private
+     * @param  {object} fileInfo Array of objects (with keys 'content' and 'path'),
+     *                           containing data to push
+     * @return {Promise}
+     */
+  const createFile = (fileInfo) => repo.createBlob(fileInfo.content)
+    .then((blob) => {
+    // every file must have these parameters
+      filesToCommit.push({
+        sha: blob.data.sha,
+        path: fileInfo.path,
+        mode: '100644',
+        type: 'blob',
+      });
+    });
+
+  // /**
+  //    * Creates blobs for all passed files
+  //    * @private
+  //    * @param  {object[]} filesInfo Array of objects (with keys 'content' and 'path'),
+  //    *                              containing data to push
+  //    * @return {Promise}
+  //    */
+  const createFiles = (filesInfo) => {
+    const promises = [];
+    const { length } = filesInfo;
+
+    for (let i = 0; i < length; i += 1) {
+      promises.push(createFile(filesInfo[i]));
+    }
+
+    return Promise.all(promises);
+  };
+
+  /**
+     * Creates a new tree
+     * @private
+     * @return {Promise}
+     */
+  const createTree = () => repo.createTree(filesToCommit, currentBranch.treeSHA)
+    .then((tree) => {
+      newCommit.treeSHA = tree.data.sha;
+    });
+
+  /**
+     * Creates a new commit
+     * @private
+     * @param  {string} message A message for the commit
+     * @return {Promise}
+     */
+  const createCommit = (message) => repo.commit(currentBranch.commitSHA, newCommit.treeSHA, message)
+    .then((commit) => {
+      newCommit.sha = commit.data.sha;
+    });
+
+  /**
+     * Updates the pointer of the current branch to point the newly created commit
+     * @private
+     * @return {Promise}
+     */
+  const updateHead = () => repo.updateHead(`heads/${currentBranch.name}`, newCommit.sha);
+
+  /**
+     * Makes the push to the currently set branch
+     * @public
+     * @param  {string}   message Message of the commit
+     * @param  {object[]} files   Array of objects (with keys 'content' and 'path'),
+     *                            containing data to push
+     * @return {Promise}
+     */
+  this.pushFiles = (message, files) => {
+    if (!repo) {
+      throw Object.assign(
+        new Error('Repository is not initialized'),
+      );
+    }
+    const hasNameProperty = Object.prototype.hasOwnProperty.call(currentBranch, 'name');
+
+    if (!hasNameProperty) {
+      throw Object.assign(
+        new Error('Branch is not set'),
+      );
+    }
+
+    return getCurrentCommitSHA()
+      .then(getCurrentTreeSHA)
+      .then(() => createFiles(files))
+      .then(createTree)
+      .then(() => createCommit(message))
+      .then(updateHead)
+      .catch((e) => {
+        console.error(e);
+      });
+  };
+}
+
+const getFiles = (dirPath, arrayOfFiles) => {
+  const files = fs.readdirSync(dirPath);
+  let arrOfFiles = arrayOfFiles || [];
+
+  files.forEach((file) => {
+    if (fs.statSync(`${dirPath}/${file}`).isDirectory()) {
+      // const spyon= jest.spyon(fs, 'statSync', 'isDirectory')
+      arrOfFiles = getFiles(`${dirPath}/${file}`, arrOfFiles);
+    } else {
+      // arrayOfFiles.push(path.join(__dirname, dirPath, '/', file));
+      arrOfFiles.push(path.join(dirPath, '/', file));
+    }
   });
-});
+  return arrOfFiles;
+};
 
-describe('getAllFileData', () => {
-  const mockAllFiles = ['handlers/health.handler.js', 'handlers/index.js'];
-  const expectedValue = [{ content: 'abc', path: 'handlers/health.handler.js' }, { content: 'def', path: 'handlers/index.js' }];
-  afterEach(() => {
-    jest.clearAllMocks();
+const getAllFilesFunction = (foldersArray) => {
+  let stats;
+  let allFiles = [];
+  foldersArray.forEach((folder) => {
+    stats = fs.statSync(folder);
+    if (stats.isFile()) { allFiles.push(folder); } else {
+      const returnedFiles = getFiles(folder);
+      allFiles = allFiles.concat(returnedFiles);
+    }
   });
-  it('should return array of objects having properties content and path', () => {
-    const spyOnReadFileSync = jest.spyOn(fs, 'readFileSync');
-    spyOnReadFileSync.mockReturnValueOnce('abc');
-    spyOnReadFileSync.mockReturnValueOnce('def');
-    const result = pushFunctions.getAllFileData(mockAllFiles);
-    // console.log(result);
-    expect(result).toEqual(expectedValue);
+  return allFiles;
+};
+
+const getAllFileData = (allFiles) => {
+  const dataToPush = allFiles.map((filepath) => {
+    const text = fs.readFileSync(filepath).toString('utf-8');
+    const fileObject = { content: text, path: filepath };
+    return fileObject;
   });
-});
+  return dataToPush;
+};
 
-describe('pushToGithub', () => {
-  // const mockFolders = ['handlers'];
-  // const mockAuthToken = 'abc';
-  const mockUsername = 'abc';
-  const mockRepoName = 'abc';
-  const mockBranchName = 'main';
-  const mockCommitMsg = 'commit';
-  const mockFolders = ['handlers'];
-  const mockAuth = 'abc';
-  const mockDataToPush = [{ content: 'abc', path: 'handlers/health.handler.js' }];
-  it('pushes folders to github', () => {
-    GithubAPI.prototype.setRepo = jest.fn();
-    const { setRepo } = GithubAPI.prototype;
-    GithubAPI.prototype.setBranch = jest.fn();
-    const { setBranch } = GithubAPI.prototype;
-    GithubAPI.prototype.pushFiles = jest.fn();
-    const { pushFiles } = GithubAPI.prototype;
+const pushToGithub = (
+  folders, authToken, username, repositoryName, branchName, commitMessage,
+) => {
+  const allFiles = getAllFilesFunction(folders);
+  const dataToPush = getAllFileData(allFiles);
+  const api = new GithubAPI({ token: authToken });
+  api.setRepo(username, repositoryName);
+  api.setBranch(branchName)
+    .then(() => api.pushFiles(commitMessage, dataToPush))
+    .then(() => {
+      console.log('Files committed!');
+    });
+};
 
-    const spyOnGetAllFilesFunction = jest.spyOn(pushFunctions, 'getAllFilesFunction');
-    spyOnGetAllFilesFunction.mockReturnValueOnce(['handlers']);
-
-    // pushFunctions.getAllFilesFunction = jest.fn();
-    // const { getAllFilesFunction } = pushFunctions.getAllFilesFunction;
-    // pushFunctions.getAllFilesFunction.mockReturnValue(['handlers/health.handler.js']);
-
-    // pushFunctions.getAllFileData = jest.fn();
-    // const { getAllFileData } = pushFunctions.getAllFileData;
-    // pushFunctions.getAllFileData.mockReturnValue(mockDataToPush);
-
-    const spyOnGetAllFileData = jest.spyOn(pushFunctions, 'getAllFileData');
-    spyOnGetAllFileData.mockReturnValueOnce(mockDataToPush);
-
-    const result = pushFunctions.pushToGithub(
-      mockFolders, mockAuth, mockUsername, mockRepoName, mockBranchName, mockCommitMsg,
-    );
-
-    expect(setRepo).toHaveBeenCalledWith(mockUsername, mockRepoName);
-    expect(setBranch).toHaveBeenCalledWith(mockBranchName);
-    expect(pushFiles).toHaveBeenCalledWith(mockCommitMsg, mockDataToPush);
-  });
-});
+module.exports = {
+  pushToGithub, getAllFileData, getAllFilesFunction, getFiles, GithubAPI,
+};
+//pushToGithub(folders, authToken, username, repositoryName, branchName, commitMessage);
