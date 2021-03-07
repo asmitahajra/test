@@ -1,15 +1,5 @@
 const fs = require('fs');
-const GitHub = require('github-api');
-jest.mock('./pushToGithub');
-const { GithubAPI } = require('./pushToGithub');
-
-// jest.mock('./pushToGithub', () => ({
-//   ...require.requireActual('./pushToGithub'),
-//   getAllFilesFunction: jest.fn(),
-//   getAllFileData: jest.fn(),
-// }));
 const pushFunctions = require('./pushToGithub');
-// const GitHubAPI= require('./')
 
 describe('getFiles', () => {
   const mockDir = 'handlers';
@@ -75,34 +65,26 @@ describe('pushToGithub', () => {
   const mockFolders = ['handlers'];
   const mockAuth = 'abc';
   const mockDataToPush = [{ content: 'abc', path: 'handlers/health.handler.js' }];
-  it('pushes folders to github', () => {
-    GithubAPI.prototype.setRepo = jest.fn();
-    const { setRepo } = GithubAPI.prototype;
-    GithubAPI.prototype.setBranch = jest.fn();
-    const { setBranch } = GithubAPI.prototype;
-    GithubAPI.prototype.pushFiles = jest.fn();
-    const { pushFiles } = GithubAPI.prototype;
+  it('pushes folders to github', async () => {
+    const mockGithubImplementation = {
+      setRepo: jest.fn(),
+      setBranch: jest.fn().mockImplementation(() => Promise.resolve()),
+      pushFiles: jest.fn()
+    };
+    pushFunctions.GithubAPI = jest.fn(() => mockGithubImplementation);
 
     const spyOnGetAllFilesFunction = jest.spyOn(pushFunctions, 'getAllFilesFunction');
     spyOnGetAllFilesFunction.mockReturnValueOnce(['handlers']);
 
-    // pushFunctions.getAllFilesFunction = jest.fn();
-    // const { getAllFilesFunction } = pushFunctions.getAllFilesFunction;
-    // pushFunctions.getAllFilesFunction.mockReturnValue(['handlers/health.handler.js']);
-
-    // pushFunctions.getAllFileData = jest.fn();
-    // const { getAllFileData } = pushFunctions.getAllFileData;
-    // pushFunctions.getAllFileData.mockReturnValue(mockDataToPush);
-
     const spyOnGetAllFileData = jest.spyOn(pushFunctions, 'getAllFileData');
     spyOnGetAllFileData.mockReturnValueOnce(mockDataToPush);
 
-    const result = pushFunctions.pushToGithub(
+    await pushFunctions.pushToGithub(
       mockFolders, mockAuth, mockUsername, mockRepoName, mockBranchName, mockCommitMsg,
     );
 
-    expect(setRepo).toHaveBeenCalledWith(mockUsername, mockRepoName);
-    expect(setBranch).toHaveBeenCalledWith(mockBranchName);
-    expect(pushFiles).toHaveBeenCalledWith(mockCommitMsg, mockDataToPush);
+    expect(mockGithubImplementation.setRepo).toHaveBeenCalledWith(mockUsername, mockRepoName);
+    expect(mockGithubImplementation.setBranch).toHaveBeenCalledWith(mockBranchName);
+    expect(mockGithubImplementation.pushFiles).toHaveBeenCalledWith(mockCommitMsg, mockDataToPush);
   });
 });

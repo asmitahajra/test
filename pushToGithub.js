@@ -217,11 +217,12 @@ const getAllFileData = (allFiles) => {
 const pushToGithub = (
   folders, authToken, username, repositoryName, branchName, commitMessage,
 ) => {
+  const { getAllFilesFunction, getAllFileData, GithubAPI } = module.exports;
   const allFiles = getAllFilesFunction(folders);
   const dataToPush = getAllFileData(allFiles);
   const api = new GithubAPI({ token: authToken });
   api.setRepo(username, repositoryName);
-  api.setBranch(branchName)
+  return api.setBranch(branchName)
     .then(() => api.pushFiles(commitMessage, dataToPush))
     .then(() => {
       console.log('Files committed!');
